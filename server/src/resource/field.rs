@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer};
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::{BitOr, BitOrAssign, Index};
 use std::str::FromStr;
@@ -13,6 +14,10 @@ impl<F> Mask<F>
 where
     u64: From<F>,
 {
+    pub const fn all() -> Self {
+        Self::from_u64(u64::MAX)
+    }
+
     const fn none() -> Self {
         Self::from_u64(0)
     }
@@ -84,7 +89,7 @@ where
     u64: From<F>,
 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        if let Some(field_list) = Option::<String>::deserialize(deserializer)? {
+        if let Some(field_list) = Option::<Cow<str>>::deserialize(deserializer)? {
             field_list.split(',').try_fold(Self::none(), |fields, field_str| {
                 F::from_str(field_str.trim())
                     .map(|field| fields | field)

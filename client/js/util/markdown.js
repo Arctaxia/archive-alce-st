@@ -55,7 +55,7 @@ class TildeWrapper extends BaseMarkdownWrapper {
 // prevent ^#... from being treated as headers, due to tag permalinks
 class TagPermalinkFixWrapper extends BaseMarkdownWrapper {
     preprocess(text) {
-        return text.replace(/^#(?=[a-zA-Z0-9_-])/g, "%%%#");
+        return text.replace(/^#(?=[a-zA-Z0-9_-])/gm, "%%%#");
     }
 
     postprocess(text) {
@@ -158,7 +158,6 @@ function formatMarkdown(text) {
     let wrappers = [
         new SjisWrapper(),
         new TildeWrapper(),
-        new TagPermalinkFixWrapper(),
         new EntityPermalinkWrapper(),
         new SearchPermalinkWrapper(),
         new SpoilersWrapper(),
@@ -167,10 +166,8 @@ function formatMarkdown(text) {
         new FaviconWrapper(),
     ];
 
-    const turndownService = new TurndownService();
-    text = DOMPurify.sanitize(text);
+    const turndownService = createTurndownService();
     text = turndownService.turndown(text);
-    text = escapeHtml(text);
     for (let wrapper of wrappers) {
         text = wrapper.preprocess(text);
     }
@@ -179,7 +176,7 @@ function formatMarkdown(text) {
     for (let wrapper of wrappers) {
         text = wrapper.postprocess(text);
     }
-    return text;
+    return DOMPurify.sanitize(text);
 }
 
 function formatInlineMarkdown(text) {
@@ -199,9 +196,8 @@ function formatInlineMarkdown(text) {
         new StrikeThroughWrapper(),
         new FaviconWrapper(),
     ];
-    const turndownService = new TurndownService();
+    const turndownService = createTurndownService();
     text = turndownService.turndown(text);
-    text = escapeHtml(text);
     for (let wrapper of wrappers) {
         text = wrapper.preprocess(text);
     }
@@ -211,6 +207,12 @@ function formatInlineMarkdown(text) {
         text = wrapper.postprocess(text);
     }
     return DOMPurify.sanitize(text);
+}
+
+function createTurndownService() {
+    const service = new TurndownService();
+    service.escape = (s) => s;
+    return service;
 }
 
 module.exports = {
