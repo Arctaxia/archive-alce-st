@@ -7,9 +7,11 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use diesel::QueryResult;
+use hayro::hayro_syntax::LoadPdfError;
 use image::error::{ImageError, LimitError, LimitErrorKind};
 use serde::Serialize;
 use std::borrow::Cow;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -22,12 +24,14 @@ pub type ApiResult<T> = Result<T, ApiError>;
 pub enum ApiError {
     #[error("{0} already exists")]
     AlreadyExists(ResourceProperty),
+    #[error("Content exceeds maximum allowed size")]
+    ContentTooLarge,
     #[error("Cyclic dependency detected in {0}s")]
     CyclicDependency(ResourceType),
     #[error("Cannot delete default {0}")]
     DeleteDefault(ResourceType),
-    #[error("Downloaded content exceeds maximum allowed size")]
-    DownloadTooLarge,
+    #[error("PDF has no pages")]
+    EmptyPdf,
     #[error("SWF has no decodable images")]
     EmptySwf,
     #[error("Video file has no frames")]
@@ -62,6 +66,7 @@ pub enum ApiError {
     Image(#[from] image::ImageError),
     JsonRejection(#[from] axum::extract::rejection::JsonRejection),
     JsonSerialization(#[from] serde_json::Error),
+    JxlDecoding(#[from] jxl::error::Error),
     #[error("Missing {0} content")]
     MissingContent(ResourceType),
     #[error("Failed to infer content type")]
@@ -85,6 +90,7 @@ pub enum ApiError {
     NotLoggedIn,
     Password(#[from] argon2::password_hash::Error),
     PathRejection(#[from] axum::extract::rejection::PathRejection),
+    PdfLoadError(#[from] PdfLoadError),
     QueryRejection(#[from] axum::extract::rejection::QueryRejection),
     Request(#[from] reqwest::Error),
     #[error("Someone else modified this in the meantime. Please try again.")]
@@ -124,10 +130,11 @@ impl ApiError {
             Self::Hidden(_) | Self::InsufficientPrivileges => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::AlreadyExists(_) | Self::ResourceModified => StatusCode::CONFLICT,
-            Self::DownloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::ContentTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedContentType(_) | Self::UnsupportedExtension(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::CyclicDependency(_)
             | Self::DeleteDefault(_)
+            | Self::EmptyPdf
             | Self::EmptySwf
             | Self::EmptyVideo
             | Self::ExpressionFailsRegex(..)
@@ -141,9 +148,11 @@ impl ApiError {
             | Self::InvalidTime(_)
             | Self::InvalidUploadToken
             | Self::InvalidUserRank
+            | Self::JxlDecoding(_)
             | Self::NoEmail
             | Self::NoNamesGiven(_)
             | Self::NotAnInteger(_)
+            | Self::PdfLoadError(_)
             | Self::SelfMerge(_)
             | Self::SwfDecoding(_)
             | Self::UrlValidation(_) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -169,9 +178,10 @@ impl ApiError {
     fn category(&self) -> &'static str {
         match self {
             Self::AlreadyExists(_) => "Already Exists",
+            Self::ContentTooLarge => "Content Too Large",
             Self::CyclicDependency(_) => "Cyclic Dependency",
             Self::DeleteDefault(_) => "Delete Default",
-            Self::DownloadTooLarge => "Download Too Large",
+            Self::EmptyPdf => "Empty PDF",
             Self::EmptySwf => "Empty SWF",
             Self::EmptyVideo => "Empty Video",
             Self::ExpressionFailsRegex(..) => "Expression Fails Regex",
@@ -197,6 +207,7 @@ impl ApiError {
             Self::Image(_) => "Image Error",
             Self::JsonRejection(_) => "JSON Rejection",
             Self::JsonSerialization(_) => "JSON Serialization Error",
+            Self::JxlDecoding(_) => "JPEG XL Decoding Error",
             Self::MissingContent(_) => "Missing Content",
             Self::MissingContentType => "Missing Content Type",
             Self::MissingFormData => "Missing Form Data",
@@ -211,6 +222,7 @@ impl ApiError {
             Self::NotLoggedIn => "Not Logged In",
             Self::Password(_) => "Password Error",
             Self::PathRejection(_) => "Path Rejection",
+            Self::PdfLoadError(_) => "PDF Load Error",
             Self::QueryRejection(_) => "Query Rejection",
             Self::Request(_) => "Request Error",
             Self::ResourceModified => "Resource Modified",
@@ -240,11 +252,30 @@ impl From<LimitErrorKind> for ApiError {
     }
 }
 
+impl From<LoadPdfError> for ApiError {
+    fn from(value: LoadPdfError) -> Self {
+        Self::PdfLoadError(PdfLoadError(value))
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut response = (self.status_code(), Json(self.response())).into_response();
         response.extensions_mut().insert(Arc::new(self));
         response
+    }
+}
+
+/// [`LoadPdfError`] doesn't impl Error, Display so we wrap it here
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Error)]
+pub struct PdfLoadError(pub LoadPdfError);
+
+impl Display for PdfLoadError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            LoadPdfError::Decryption(e) => write!(f, "PDF decryption error: {e:?}"),
+            LoadPdfError::Invalid => f.write_str("Invalid PDF file"),
+        }
     }
 }
 

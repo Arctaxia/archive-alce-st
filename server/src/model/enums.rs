@@ -1,4 +1,3 @@
-use byteorder::{NetworkEndian, WriteBytesExt};
 use diesel::deserialize::{self, FromSql};
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::{self, IsNull, Output, ToSql};
@@ -7,6 +6,7 @@ use diesel::{AsExpression, FromSqlRow};
 use mime::Mime;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use std::io::Write;
 use std::ops::{BitAnd, BitOr, BitOrAssign};
 use std::path::Path;
 use std::str::FromStr;
@@ -27,14 +27,6 @@ use utoipa::{PartialSchema, ToSchema};
 #[error("{0} is not a supported file extension")]
 pub struct ParseExtensionError(String);
 
-#[derive(Debug, Error, PartialEq, Eq)]
-#[error("Content-Type {0} is not supported")]
-pub struct ParseMimeTypeError(String);
-
-#[derive(Debug, Error)]
-#[error("Cannot convert None to Score")]
-pub struct FromRatingError;
-
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, FromRepr, AsExpression, FromSqlRow, Serialize, Deserialize, ToSchema,
 )]
@@ -49,7 +41,7 @@ pub enum AvatarStyle {
 
 impl ToSql<SmallInt, Pg> for AvatarStyle {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -57,7 +49,7 @@ impl ToSql<SmallInt, Pg> for AvatarStyle {
 impl FromSql<SmallInt, Pg> for AvatarStyle {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        AvatarStyle::from_repr(database_value).ok_or("Failed to deserialize avatar style".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize avatar style".into())
     }
 }
 
@@ -73,11 +65,12 @@ pub enum PostType {
     Animation,
     Video,
     Flash,
+    Document,
 }
 
 impl ToSql<SmallInt, Pg> for PostType {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -85,7 +78,7 @@ impl ToSql<SmallInt, Pg> for PostType {
 impl FromSql<SmallInt, Pg> for PostType {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        PostType::from_repr(database_value).ok_or("Failed to deserialize post type".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize post type".into())
     }
 }
 
@@ -113,6 +106,10 @@ pub enum MimeType {
     Swf,
     #[serde(rename = "image/avif")]
     Avif,
+    #[serde(rename = "application/pdf")]
+    Pdf,
+    #[serde(rename = "image/jxl")]
+    Jxl,
 }
 
 impl MimeType {
@@ -124,12 +121,14 @@ impl MimeType {
             "bmp" | "dib" => Ok(Self::Bmp),
             "gif" => Ok(Self::Gif),
             "jpg" | "jpeg" | "jpe" | "jif" | "jfif" | "jfi" => Ok(Self::Jpeg),
+            "jxl" => Ok(Self::Jxl),
             "png" => Ok(Self::Png),
             "mp4" | "m4v" => Ok(Self::Mp4),
             "mov" | "movie" | "qt" => Ok(Self::Mov),
             "webm" => Ok(Self::Webm),
             "webp" => Ok(Self::Webp),
             "swf" => Ok(Self::Swf),
+            "pdf" => Ok(Self::Pdf),
             _ => Err(ParseExtensionError(extension.into())),
         }
     }
@@ -148,12 +147,14 @@ impl MimeType {
             Self::Bmp => "bmp",
             Self::Gif => "gif",
             Self::Jpeg => "jpg",
+            Self::Jxl => "jxl",
             Self::Png => "png",
             Self::Webp => "webp",
             Self::Mp4 => "mp4",
             Self::Mov => "mov",
             Self::Webm => "webm",
             Self::Swf => "swf",
+            Self::Pdf => "pdf",
         }
     }
 
@@ -163,28 +164,30 @@ impl MimeType {
 }
 
 impl FromStr for MimeType {
-    type Err = ParseMimeTypeError;
+    type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let content_type = s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase();
         match content_type.as_str() {
             "application/x-shockwave-flash" | "application/vnd.adobe.flash.movie" => Ok(MimeType::Swf),
+            "application/pdf" => Ok(MimeType::Pdf),
             "image/avif" => Ok(MimeType::Avif),
             "image/bmp" => Ok(MimeType::Bmp),
             "image/gif" => Ok(MimeType::Gif),
             "image/jpeg" => Ok(MimeType::Jpeg),
+            "image/jxl" => Ok(MimeType::Jxl),
             "image/png" => Ok(MimeType::Png),
             "image/webp" => Ok(MimeType::Webp),
-            "video/mp4" => Ok(MimeType::Mp4),
+            "video/mp4" | "video/x-m4v" => Ok(MimeType::Mp4),
             "video/quicktime" => Ok(MimeType::Mov),
             "video/webm" => Ok(MimeType::Webm),
-            _ => Err(ParseMimeTypeError(s.to_owned())),
+            _ => Err(format!("MIME type {content_type} is not supported")),
         }
     }
 }
 
 impl ToSql<SmallInt, Pg> for MimeType {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -192,7 +195,7 @@ impl ToSql<SmallInt, Pg> for MimeType {
 impl FromSql<SmallInt, Pg> for MimeType {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        MimeType::from_repr(database_value).ok_or("Failed to deserialize mime type".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize mime type".into())
     }
 }
 
@@ -224,7 +227,7 @@ pub enum PostSafety {
 
 impl ToSql<SmallInt, Pg> for PostSafety {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -232,7 +235,7 @@ impl ToSql<SmallInt, Pg> for PostSafety {
 impl FromSql<SmallInt, Pg> for PostSafety {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        PostSafety::from_repr(database_value).ok_or("Failed to deserialize post safety".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize post safety".into())
     }
 }
 
@@ -313,7 +316,7 @@ impl BitAnd<PostFlag> for PostFlags {
 
 impl ToSql<SmallInt, Pg> for PostFlags {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(self.0.cast_signed())?;
+        out.write_all(&(self.0.cast_signed()).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -367,7 +370,7 @@ pub enum UserRank {
 
 impl ToSql<SmallInt, Pg> for UserRank {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -375,7 +378,7 @@ impl ToSql<SmallInt, Pg> for UserRank {
 impl FromSql<SmallInt, Pg> for UserRank {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        UserRank::from_repr(database_value).ok_or("Failed to deserialize user privilege".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize user privilege".into())
     }
 }
 
@@ -424,10 +427,10 @@ pub enum Score {
 }
 
 impl TryFrom<Rating> for Score {
-    type Error = FromRatingError;
+    type Error = &'static str;
     fn try_from(value: Rating) -> Result<Self, Self::Error> {
         match value {
-            Rating::None => Err(FromRatingError),
+            Rating::None => Err("Cannot convert `None` to Score"),
             Rating::Dislike => Ok(Self::Dislike),
             Rating::Like => Ok(Self::Like),
         }
@@ -436,7 +439,7 @@ impl TryFrom<Rating> for Score {
 
 impl ToSql<SmallInt, Pg> for Score {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -444,7 +447,7 @@ impl ToSql<SmallInt, Pg> for Score {
 impl FromSql<SmallInt, Pg> for Score {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        Score::from_repr(database_value).ok_or("Failed to deserialize score".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize score".into())
     }
 }
 
@@ -461,7 +464,7 @@ pub enum ResourceOperation {
 
 impl ToSql<SmallInt, Pg> for ResourceOperation {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -469,7 +472,7 @@ impl ToSql<SmallInt, Pg> for ResourceOperation {
 impl FromSql<SmallInt, Pg> for ResourceOperation {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        ResourceOperation::from_repr(database_value).ok_or("Failed to deserialize resource operation".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize resource operation".into())
     }
 }
 
@@ -493,7 +496,7 @@ pub enum ResourceType {
 
 impl ToSql<SmallInt, Pg> for ResourceType {
     fn to_sql(&self, out: &mut Output<Pg>) -> serialize::Result {
-        out.write_i16::<NetworkEndian>(*self as i16)?;
+        out.write_all(&(*self as i16).to_be_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -501,7 +504,7 @@ impl ToSql<SmallInt, Pg> for ResourceType {
 impl FromSql<SmallInt, Pg> for ResourceType {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let database_value = i16::from_sql(value)?;
-        ResourceType::from_repr(database_value).ok_or("Failed to deserialize resource type".into())
+        Self::from_repr(database_value).ok_or("Failed to deserialize resource type".into())
     }
 }
 

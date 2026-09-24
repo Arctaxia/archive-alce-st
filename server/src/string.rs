@@ -6,6 +6,7 @@ use diesel::serialize::{self, Output, ToSql};
 use diesel::sql_types::{SingleValue, Text};
 use diesel::{AsExpression, declare_sql_function};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
@@ -16,6 +17,9 @@ use utoipa::ToSchema;
 #[declare_sql_function]
 extern "SQL" {
     fn lower<T: SingleValue>(text: T) -> Text;
+
+    #[sql_name = "lower"]
+    fn lower_pattern(pattern: Text) -> Text;
 }
 
 /// A wrapper over a [`String`] that's meant to contain sensitive data.
@@ -192,6 +196,8 @@ impl ToSql<Text, Pg> for LargeString {
 
 impl<'de> Deserialize<'de> for LargeString {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer).map(|s| Arc::from(s.trim())).map(Self)
+        Cow::<str>::deserialize(deserializer)
+            .map(|s| Arc::from(s.trim()))
+            .map(Self)
     }
 }

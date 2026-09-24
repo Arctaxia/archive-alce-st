@@ -5,7 +5,7 @@ use crate::config::Action;
 use crate::content::hash::PostHash;
 use crate::content::signature::SignatureCache;
 use crate::content::thumbnail::{ThumbnailCategory, ThumbnailType};
-use crate::content::upload::{MAX_UPLOAD_SIZE, PartName, UploadToken};
+use crate::content::upload::{PartName, UploadToken};
 use crate::content::{Content, signature, upload};
 use crate::db::AsyncConnectionPool;
 use crate::extract::{
@@ -40,12 +40,12 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-pub fn routes() -> OpenApiRouter<AppState> {
+pub fn routes(upload_limit: DefaultBodyLimit) -> OpenApiRouter<AppState> {
     let upload_capable_routes = OpenApiRouter::new()
         .routes(routes!(reverse_search))
         .routes(routes!(create))
         .routes(routes!(update))
-        .route_layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE));
+        .route_layer(upload_limit);
     OpenApiRouter::new()
         .routes(routes!(list))
         .routes(routes!(get, delete))
@@ -128,7 +128,7 @@ where
 /// | `uploader`, `upload`, `submit`                               | uploaded by given user (accepts wildcards)                              |
 /// | `comment`                                                    | commented by given user (accepts wildcards)                             |
 /// | `fav`                                                        | favorited by given user (accepts wildcards)                             |
-/// | `pool`                                                       | belonging to the pool with the given name (accepts wildcards) or ID     |
+/// | `pool`                                                       | belonging to pool with given name (accepts wildcards) or ID             |
 /// | `pool-category`                                              | belonging to pools in the given pool category (accepts wildcards)       |
 /// | `tag-count`                                                  | having given number of tags                                             |
 /// | `comment-count`                                              | having given number of comments                                         |
@@ -137,11 +137,11 @@ where
 /// | `note-text`                                                  | having given note text (accepts wildcards)                              |
 /// | `relation-count`                                             | having given number of relations                                        |
 /// | `feature-count`                                              | having been featured given number of times                              |
-/// | `type`                                                       | type of posts (can be either `image`, `animation`, `flash`, or `video`) |
+/// | `type`                                                       | type of posts (`image`, `animation`, `flash`, `video`, or `document`)   |
 /// | `content-checksum`                                           | having given BLAKE3 checksum                                            |
 /// | `flag`                                                       | having given flag (can be either `loop` or `sound`)                     |
 /// | `source`                                                     | having given source                                                     |
-/// | `file-size`                                                  | having given file size (in bytes)                                       |
+/// | `file-size`                                                  | having given file size (in byte units B, kB, MB, GB, etc.)              |
 /// | `image-width`, `width`                                       | having given image width (where applicable)                             |
 /// | `image-height`, `height`                                     | having given image height (where applicable)                            |
 /// | `image-area`, `area`                                         | having given number of pixels (image width * image height)              |
@@ -679,13 +679,23 @@ async fn create_impl(ctx: Ctx, params: ResourceParams<Field>, body: PostCreateBo
             // Create thumbnails
             if let Some(thumbnail) = custom_thumbnail {
                 ctx.verify_privilege(Action::PostEditThumbnail)?;
-                update::post::thumbnail(conn, &post_hash, thumbnail, ThumbnailCategory::Custom)?;
+                let thumbnail_size = filesystem::save_post_thumbnail(&post_hash, thumbnail, ThumbnailCategory::Custom)?;
+                diesel::update(post::table.find(post.id))
+                    .set(post::custom_thumbnail_size.eq(thumbnail_size))
+                    .execute(conn)?;
             }
-            update::post::thumbnail(conn, &post_hash, content_properties.thumbnail, ThumbnailCategory::Generated)?;
+            let thumbnail_size = filesystem::save_post_thumbnail(
+                &post_hash,
+                content_properties.thumbnail,
+                ThumbnailCategory::Generated,
+            )?;
+            diesel::update(post::table.find(post.id))
+                .set(post::generated_thumbnail_size.eq(thumbnail_size))
+                .execute(conn)?;
 
             let post_data = SnapshotData {
                 safety: post.safety,
-                checksum: hex::encode(&post.checksum),
+                checksum: post.checksum,
                 flags: post.flags,
                 source: post.source,
                 description: post.description,
@@ -978,7 +988,8 @@ async fn update_impl(
         None => None,
     };
 
-    let custom_thumbnail = match Content::new(body.thumbnail_token, body.thumbnail_url) {
+    let remove_custom_thumbnail = body.thumbnail_token.as_ref().is_some_and(Option::is_none);
+    let custom_thumbnail = match Content::new(body.thumbnail_token.flatten(), body.thumbnail_url) {
         Some(content) => Some(content.thumbnail(ctx.clone(), ThumbnailType::Post).await?),
         None => None,
     };
@@ -1055,7 +1066,7 @@ async fn update_impl(
             if let Some(content_properties) = new_content {
                 ctx.verify_privilege(Action::PostEditContent)?;
 
-                new_snapshot_data.checksum = hex::encode(&content_properties.checksum);
+                new_snapshot_data.checksum = content_properties.checksum;
 
                 // Update content metadata
                 new_post.file_size = content_properties.file_size;
@@ -1082,11 +1093,22 @@ async fn update_impl(
                 filesystem::move_file(&temp_path, &post_hash.content_path(content_properties.mime_type))?;
 
                 // Replace generated thumbnail
-                update::post::thumbnail(conn, &post_hash, content_properties.thumbnail, ThumbnailCategory::Generated)?;
+                filesystem::save_post_thumbnail(
+                    &post_hash,
+                    content_properties.thumbnail,
+                    ThumbnailCategory::Generated,
+                )?;
             }
             if let Some(thumbnail) = custom_thumbnail {
                 ctx.verify_privilege(Action::PostEditThumbnail)?;
-                update::post::thumbnail(conn, &post_hash, thumbnail, ThumbnailCategory::Custom)?;
+
+                let thumbnail_size = filesystem::save_post_thumbnail(&post_hash, thumbnail, ThumbnailCategory::Custom)?;
+                new_post.custom_thumbnail_size = thumbnail_size;
+            } else if remove_custom_thumbnail {
+                ctx.verify_privilege(Action::PostEditThumbnail)?;
+
+                filesystem::delete_custom_thumbnail(&post_hash)?;
+                new_post.custom_thumbnail_size = 0;
             }
 
             new_post.last_edit_time = DateTime::now();
@@ -1127,9 +1149,10 @@ struct PostUpdateBody {
     content_token: Option<UploadToken>,
     /// URL to fetch content from.
     content_url: Option<Url>,
-    /// Token referencing previously uploaded thumbnail.
+    /// Token referencing previously uploaded custom thumbnail. Set to null to remove.
     #[schema(value_type = Option<String>)]
-    thumbnail_token: Option<UploadToken>,
+    #[serde(default, deserialize_with = "api::deserialize_some")]
+    thumbnail_token: Option<Option<UploadToken>>,
     /// URL to fetch thumbnail from.
     thumbnail_url: Option<Url>,
 }
@@ -1188,7 +1211,7 @@ async fn update(
             let [content_token, thumbnail_token] = decoded_body.files;
 
             post_update.content_token = content_token;
-            post_update.thumbnail_token = thumbnail_token;
+            post_update.thumbnail_token = thumbnail_token.map(Some);
             update_impl(ctx, post_id, params, post_update).await
         }
     }
@@ -1583,6 +1606,7 @@ mod test {
         let mut conn = get_connection()?;
         let (post, tag_count, relation_count) = get_post_info(&mut conn)?;
 
+        simulate_upload("1_pixel.png", "thumbnail.png")?;
         verify_response(&format!("PUT /post/{POST_ID}/?{FIELDS}"), "post/edit/typical").await?;
 
         let (new_post, new_tag_count, new_relation_count) = get_post_info(&mut conn)?;
@@ -1704,6 +1728,7 @@ mod test {
         simulate_upload("1_pixel.png", "upload.png")?;
         verify_response("POST /posts/reverse-search", "post/reverse_search/invalid_token").await?;
 
+        simulate_upload("gradient.png", "image.png")?;
         verify_response("POST /posts", "post/create/invalid_tag").await?;
         verify_response("POST /posts", "post/create/invalid_safety").await?;
         verify_response("POST /posts", "post/create/invalid_note").await?;
@@ -1713,6 +1738,12 @@ mod test {
         verify_response("POST /posts", "post/create/missing_content").await?;
         verify_response("POST /posts", "post/create/duplicate_relation").await?;
         verify_response("POST /posts", "post/create/nonexistent_relation").await?;
+        verify_response("POST /posts", "post/create/content_too_wide").await?;
+        verify_response("POST /posts", "post/create/content_too_tall").await?;
+        verify_response("POST /posts", "post/create/content_too_large").await?;
+        verify_response("POST /posts", "post/create/thumbnail_too_wide").await?;
+        verify_response("POST /posts", "post/create/thumbnail_too_tall").await?;
+        verify_response("POST /posts", "post/create/thumbnail_too_large").await?;
 
         verify_response("PUT /post/1", "post/edit/invalid_tag").await?;
         verify_response("PUT /post/1", "post/edit/invalid_safety").await?;
@@ -1722,6 +1753,12 @@ mod test {
         verify_response("PUT /post/1", "post/edit/invalid_thumbnail_token").await?;
         verify_response("PUT /post/1", "post/edit/duplicate_relation").await?;
         verify_response("PUT /post/1", "post/edit/nonexistent_relation").await?;
+        verify_response("PUT /post/1", "post/edit/content_too_wide").await?;
+        verify_response("PUT /post/1", "post/edit/content_too_tall").await?;
+        verify_response("PUT /post/1", "post/edit/content_too_large").await?;
+        verify_response("PUT /post/1", "post/edit/thumbnail_too_wide").await?;
+        verify_response("PUT /post/1", "post/edit/thumbnail_too_tall").await?;
+        verify_response("PUT /post/1", "post/edit/thumbnail_too_large").await?;
 
         verify_response("PUT /post/1/score", "post/rate/invalid").await?;
         verify_response("POST /featured-post", "post/feature/double_feature").await?;

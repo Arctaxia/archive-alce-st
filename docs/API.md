@@ -697,7 +697,7 @@ data.
     | `uploader`, `upload`, `submit`                               | uploaded by given user (accepts wildcards)                              |
     | `comment`                                                    | commented by given user (accepts wildcards)                             |
     | `fav`                                                        | favorited by given user (accepts wildcards)                             |
-    | `pool`                                                       | belonging to the pool with the given name (accepts wildcards) or ID     |
+    | `pool`                                                       | belonging to pool with given name (accepts wildcards) or ID             |
     | `pool-category`                                              | belonging to pools in the given pool category (accepts wildcards)       |
     | `tag-count`                                                  | having given number of tags                                             |
     | `comment-count`                                              | having given number of comments                                         |
@@ -706,11 +706,11 @@ data.
     | `note-text`                                                  | having given note text (accepts wildcards)                              |
     | `relation-count`                                             | having given number of relations                                        |
     | `feature-count`                                              | having been featured given number of times                              |
-    | `type`                                                       | type of posts (can be either `image`, `animation`, `flash`, or `video`) |
+    | `type`                                                       | type of posts (`image`, `animation`, `flash`, `video`, or `document`)   |
     | `content-checksum`                                           | having given BLAKE3 checksum                                            |
     | `flag`                                                       | having given flag (can be either `loop` or `sound`)                     |
     | `source`                                                     | having given source                                                     |
-    | `file-size`                                                  | having given file size (in bytes)                                       |
+    | `file-size`                                                  | having given file size (in byte units B, kB, MB, GB, etc.)              |
     | `image-width`, `width`                                       | having given image width (where applicable)                             |
     | `image-height`, `height`                                     | having given image height (where applicable)                            |
     | `image-area`, `area`                                         | having given number of pixels (image width * image height)              |
@@ -1493,6 +1493,7 @@ data.
     | `post`                                                       | specific post ID                               |
     | `user`, `author`                                             | created by given user (accepts wildcards)      |
     | `text`                                                       | containing given text (accepts wildcards)      |
+    | `score`                                                      | having given score                             |
     | `creation-date`, `creation-time`                             | created at given date                          |
     | `last-edit-date`, `last-edit-time`, `edit-date`, `edit-time` | whose most recent edit date matches given date |
 
@@ -1503,6 +1504,7 @@ data.
     | `random`                                                     | as random as it can get   |
     | `user`, `author`                                             | author name, A to Z       |
     | `post`                                                       | post ID, newest to oldest |
+    | `score`                                                      | highest to lowest         |
     | `creation-date`, `creation-time`                             | newest to oldest          |
     | `last-edit-date`, `last-edit-time`, `edit-date`, `edit-time` | recently edited first     |
 
@@ -2350,6 +2352,7 @@ One file together with its metadata posted to the site.
     - `"animation"` - animated image (GIF).
     - `"video"` - WEBM video.
     - `"flash"` - Flash animation/game.
+    - `"document"` - documents (PDF)
 
 - `<checksum>`: the BLAKE3 file checksum.
 - `<checksum-MD5>`: the MD5 file checksum.
