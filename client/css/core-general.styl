@@ -7,7 +7,7 @@ $inactive-tab-text-color = $inactive-link-color
 $inactive-tab-text-color-darktheme = $inactive-link-color-darktheme
 
 /* latin */
-@font-face
+ @font-face
     font-family: 'Open Sans'
     font-style: normal
     font-weight: 400
@@ -25,21 +25,23 @@ body
     overflow-y: scroll
     margin: 0
     color: $text-color
-    font-family: 'Open Sans', sans-serif
-    font-size: 1em
+    font-family: 'EB Garamond', serif
+    letter-spacing: 1%
+    font-size: 1.05em
     line-height: 1.4
     @media (max-width: 800px)
         font-size: 0.875em
     @media (max-width: 1200px)
-        font-size: 0.95em
+        font-size: 1em /* 0.95em */
 
 body.darktheme
     color: $text-color-darktheme
     background: $window-color-darktheme
 
 h1, h2, h3
-    font-weight: normal
+    font-weight: 500
     margin-bottom: 1em
+    font-style: italic
 
 h1
     font-size: 2em
@@ -71,11 +73,31 @@ a
     .vim-nav-hint
         position: absolute
         visibility: hidden
-.darktheme a
+
+.darktheme a:not([class*="tag"])
+    color: $main-color-darktheme
     &.inactive
         color: $inactive-link-color-darktheme
     &.icon
         color: $inactive-link-color-darktheme
+
+.darktheme a[class="tag-general"], .darktheme a[class="tag-default"]
+        color: $main-color-darktheme
+
+/* I don't know where else I should put these (outline for tags, smallcaps-ifying thumbnail label font) */
+ul.compact-tags li a 
+  display: inline
+  text-shadow: 0px 0px 0.5px black
+
+.type 
+  font-variant: small-caps
+  text-transform: capitalize
+/* --- */
+
+/* Rounded corners for avatars. */
+li[data-name="account"] span.thumbnail, div#user-summary span.thumbnail, div.avatar span.thumbnail, div.user-list span.thumbnail {
+  border-radius: 10%;
+}
 
 a.append, span.append
     margin-left: 1em
@@ -87,12 +109,13 @@ form .fa-question-circle-o
     padding: 1.5em
     text-align: center
     @media (max-width: 1000px)
-        padding: 1em
+        padding: 1em 0.80em 0.80em
     >.content-wrapper
         box-sizing: border-box /* make max-width: 100% on this element include padding */
         text-align: left
         display: inline-block
         margin: 0 auto
+        border-radius: 10px
         >*:first-child, form h1
             margin-top: 0
         nav.buttons
