@@ -1,7 +1,7 @@
 <div class='content-wrapper transparent-container' id='home'>
     <div class='messages'></div>
     <header>
-        <img src="img/apple-touch-icon.png" style="text-align:center;">
+        <img class="home-logo" src="img/apple-touch-icon.png" style="text-align:center;" height="64" width="64">
         <div><%- ctx.name %></div>
     </header>
     <% if (ctx.canListPosts) { %>
