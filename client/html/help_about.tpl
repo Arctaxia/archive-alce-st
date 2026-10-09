@@ -1,4 +1,4 @@
-<h1>About le website</h1>
+<h1>About this website</h1>
 
 <p>The Autredex (fr: other-dex) is a semi-private media archive and experimental imageboard project primarily maintained by <a href="https://www.arctaxia.ink/">Arctaxia</a>.</p>
 
